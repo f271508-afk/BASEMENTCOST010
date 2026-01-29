@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地下室工程造價概算系統 v50.8</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .animate-sync { animation: spin 2s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .method-tab-active { background-color: #4338ca; color: white; }
+        .region-tab-active { border-color: #4338ca; background-color: #eef2ff; color: #4338ca; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 p-4 md:p-8">
+    <div id="app" class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-start justify-between mb-8 gap-6 border-b pb-8 border-slate-200">
+            <div class="space-y-3">
+                <h1 class="text-3xl font-bold text-slate-800 flex items-center gap-3">
+                    <i data-lucide="building-2" class="text-indigo-700 w-8 h-8"></i>
+                    地下室工程造價概算系統
+                </h1>
+                <div class="flex flex-wrap gap-2">
+                    <div class="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 text-[10px] font-black text-slate-500 shadow-sm">
+                        <i data-lucide="user" class="text-indigo-500 w-3 h-3"></i> UID: <span id="uid-display">載入中...</span>
+                    </div>
+                    <div id="sync-badge" class="flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-black shadow-sm transition-all duration-300 bg-emerald-50 border-emerald-200 text-emerald-600">
+                        <i data-lucide="save" id="sync-icon" class="w-3 h-3"></i> <span id="sync-text">雲端同步</span>
+                    </div>
+                    
+                    <div class="flex items-center gap-1 ml-2">
+                        <button onclick="exportToExcel()" class="flex items-center gap-2 px-3 py-1 rounded-l-full border border-slate-200 bg-white text-[10px] font-black text-slate-600 hover:bg-slate-50 shadow-sm transition-all">
+                            <i data-lucide="file-spreadsheet" class="w-3 h-3 text-emerald-500"></i> 匯出 Excel
+                        </button>
+                        <label class="flex items-center gap-2 px-3 py-1 rounded-r-full border border-l-0 border-slate-200 bg-emerald-50 text-[10px] font-black text-emerald-700 hover:bg-emerald-100 shadow-sm cursor-pointer transition-all">
+                            <i data-lucide="file-up" class="w-3 h-3 text-emerald-600"></i> 匯入 Excel
+                            <input type="file" id="import-excel" class="hidden" accept=".xlsx,.xls" onclick="this.value=null" onchange="importFromExcel(event)">
+                        </label>
+                    </div>
+                </div>
+                <p class="text-[10px] text-rose-500 font-bold">* 註：匯出包含各區單價與工法參數；匯入後會自動更新雲端資料。</p>
+            </div>
+            <div class="text-right">
+                <p class="text-[10px] text-slate-400 font-black uppercase tracking-wider mb-1">工程總造價預估 (未稅)</p>
+                <p id="total-budget" class="text-4xl font-black text-indigo-700 leading-none tracking-tighter">NT$0</p>
+                <div class="mt-2 bg-emerald-600 text-white px-3 py-1 rounded-lg inline-flex items-center gap-2 shadow-sm">
+                    <span class="text-[10px] font-black uppercase">平均單坪造價:</span>
+                    <span id="avg-cost" class="text-sm font-black">NT$0</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <!-- 左側：設定與輸入 -->
+            <section class="lg:col-span-5 space-y-6">
+                <!-- 區域選擇器 -->
+                <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+                    <div class="bg-indigo-700 p-5 flex items-center justify-between text-white">
+                        <div class="flex items-center gap-3">
+                            <div class="bg-white/20 p-2 rounded-lg"><i data-lucide="map-pin" class="w-5 h-5"></i></div>
+                            <h3 class="text-sm font-black uppercase tracking-widest">區域設定編輯</h3>
+                        </div>
+                        <button onclick="addNewRegion()" class="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black flex items-center gap-1">
+                            <i data-lucide="plus" class="w-3 h-3"></i> 新增區域
+                        </button>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <div id="region-list" class="flex flex-wrap gap-2"></div>
+                        <div id="region-editor" class="mt-4 pt-4 border-t border-slate-100">
+                            <label class="text-[9px] font-black uppercase text-slate-400 block mb-2">區域名稱編輯</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="edit-region-name" oninput="updateRegionName(this.value)" class="flex-1 border rounded-lg px-3 py-2 text-xs font-bold focus:border-indigo-500 outline-none bg-slate-50 border-slate-200">
+                                <button id="btn-delete-region" onclick="deleteCurrentRegion()" class="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors border border-rose-100" title="刪除此區域">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 1. 基礎規模設定 (全域) -->
+                <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+                    <div class="bg-slate-900 p-5 flex items-center gap-3 text-white">
+                        <div class="bg-indigo-500 p-2 rounded-lg"><i data-lucide="arrow-down-to-line" class="w-5 h-5"></i></div>
+                        <h3 class="text-sm font-black uppercase">1. 基礎規模設定</h3>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <div class="space-y-2">
+                            <label class="text-[9px] font-black uppercase text-slate-400">擋土工法選擇</label>
+                            <div class="flex bg-slate-100 p-1 rounded-xl gap-1">
+                                <button onclick="updateState('retainingMethod', 'wall')" id="btn-method-wall" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all">連續壁</button>
+                                <button onclick="updateState('retainingMethod', 'pile')" id="btn-method-pile" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all">排樁</button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-5">
+                            <div class="input-group" data-label="地下單層面積" data-unit="坪" data-key="belowUnitArea"></div>
+                            <div class="input-group" data-label="地下總層數" data-unit="層" data-key="belowFloors"></div>
+                        </div>
+                        <div class="pt-2 border-t border-slate-100 relative">
+                            <div class="input-group" data-label="地下建築週長" data-unit="m" data-key="belowPerimeter" data-color="text-emerald-600"></div>
+                            <button onclick="resetKey('belowPerimeter')" class="absolute right-12 top-10 text-slate-300 hover:text-indigo-600"><i data-lucide="rotate-ccw" class="w-4 h-4"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 當前區域之工法與參數 (隨區域切換) -->
+                <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+                    <div class="bg-indigo-600 p-5 flex items-center gap-3 text-white">
+                        <div class="bg-white/20 p-2 rounded-lg"><i data-lucide="scaling" class="w-5 h-5"></i></div>
+                        <h3 class="text-sm font-black uppercase">2. 區域工法與參數</h3>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        <div id="method-wall-params" class="space-y-4">
+                            <div class="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl">
+                                <div class="input-group-region" data-label="壁深度比 (D/H)" data-unit="倍" data-key="depthRatio"></div>
+                                <div class="input-group-region" data-label="壁厚係數 (H/x)" data-unit="係數" data-key="thicknessRatio"></div>
+                            </div>
+                        </div>
+                        <div id="method-pile-params" class="space-y-4 hidden">
+                            <div class="bg-slate-50 p-4 rounded-2xl">
+                                <div class="input-group-region" data-label="排樁中心間距" data-unit="m" data-key="pileSpacing"></div>
+                            </div>
+                        </div>
+                        <div class="space-y-4 pt-4 border-t border-slate-100">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="input-group-region" data-label="支撐層間距" data-unit="m/層" data-key="supportSpan"></div>
+                                <div class="input-group-region" data-label="大底厚度" data-unit="m" data-key="raftFoundationCustom"></div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="input-group-region" data-label="B1 層高" data-unit="m" data-key="b1HeightCustom"></div>
+                                <div class="input-group-region" data-label="標準層高" data-unit="m" data-key="typicalHeightCustom"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 右側：報表與細項編輯 -->
+            <section class="lg:col-span-7 space-y-6">
+                <!-- 數據卡片 -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="physics-cards"></div>
+
+                <!-- 主報表 -->
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                    <table class="w-full text-left">
+                        <thead class="bg-slate-50 text-[10px] font-black text-slate-400 uppercase border-b border-slate-100">
+                            <tr>
+                                <th class="px-8 py-4">預算大項</th>
+                                <th class="px-8 py-4 text-right">主要參數推估</th>
+                                <th class="px-8 py-4 text-right">預算金額</th>
+                            </tr>
+                        </thead>
+                        <tbody id="budget-body" class="divide-y divide-slate-100 font-medium text-slate-700"></tbody>
+                        <tfoot class="bg-slate-900 text-white font-black">
+                            <tr>
+                                <td class="px-8 py-6 text-base">地下室造價估算 (未稅總額)</td>
+                                <td colspan="2" id="footer-total" class="px-8 py-6 text-right text-3xl tabular-nums text-indigo-300">NT$0</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <!-- 詳細參數編修區 -->
+                <div class="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl space-y-6">
+                    <div class="flex items-center justify-between">
+                        <p class="text-xs font-black uppercase text-indigo-700 flex items-center gap-2">
+                            <i data-lucide="sliders" class="w-4 h-4"></i> 當前區域單價與結構用量 (<span id="current-region-label">載入中</span>)
+                        </p>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div class="space-y-4">
+                            <h4 class="text-[10px] font-black text-slate-400 uppercase border-b pb-2">單位單價設定 (NT$)</h4>
+                            <div id="rates-editor" class="grid grid-cols-2 gap-3"></div>
+                        </div>
+                        <div class="space-y-4">
+                            <h4 class="text-[10px] font-black text-slate-400 uppercase border-b pb-2">結構細部用量 (每 m²)</h4>
+                            <div id="ratios-editor" class="grid grid-cols-2 gap-3"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        // --- 全域常數與預設值 ---
+        const PING_TO_M2 = 3.3058;
+
+        // 將工法參數也列入區域屬性中
+        const DEFAULT_PARAMS = {
+            // 單價
+            rateWall60: 18500, rateWall70: 20500, rateWall80: 22500, rateWall90: 25000, rateWall100: 27500,
+            ratePileUnit: 45000, rateEarthworkM3: 550, rateSupportM2: 2800, 
+            rateBasementMEP: 14000, rateBasementFinish: 6000, 
+            rateRC_M3: 2950, rateForm_M2: 880, rateRebar_KG: 28.5,
+            // 結構用量
+            ratioRaftRC: 0.40, ratioRaftForm: 0.28, ratioRaftRebar: 60,
+            ratioB1RC: 0.25, ratioB1Form: 1.05, ratioB1Rebar: 52,
+            ratioTypicalRC: 0.18, ratioTypicalForm: 0.90, ratioTypicalRebar: 45,
+            // 工法推估參數 (現在隨區域變動)
+            depthRatio: 2.0, thicknessRatio: 20, pileSpacing: 1.2, 
+            supportSpan: 3.5, b1HeightCustom: 4.2, typicalHeightCustom: 3.2, raftFoundationCustom: 2.5
+        };
+
+        const INITIAL_REGIONS = [
+            { id: 'north', name: '雙北區', ...DEFAULT_PARAMS },
+            { id: 'taoyuan', name: '桃園區', ...DEFAULT_PARAMS, rateEarthworkM3: 500 },
+            { id: 'central', name: '台中區', ...DEFAULT_PARAMS, rateEarthworkM3: 450, rateRC_M3: 2800 },
+            { id: 'south', name: '南區', ...DEFAULT_PARAMS, rateEarthworkM3: 400, rateRC_M3: 2750 }
+        ];
+
+        const KEY_LABELS = {
+            rateEarthworkM3: '土方清運 ($/m³)', rateSupportM2: '安全支撐 ($/坪)',
+            rateBasementMEP: '機電預估 ($/坪)', rateBasementFinish: '裝修預估 ($/坪)',
+            rateRC_M3: 'RC 混凝土 ($/m³)', rateForm_M2: '模板工資 ($/m²)',
+            rateRebar_KG: '鋼筋加工 ($/kg)', ratePileUnit: '排樁單支報價 ($)',
+            rateWall60: '連續壁60cm ($/m²)', rateWall70: '連續壁70cm ($/m²)',
+            rateWall80: '連續壁80cm ($/m²)', rateWall90: '連續壁90cm ($/m²)',
+            rateWall100: '連續壁100cm ($/m²)',
+            ratioRaftRC: '大底混凝土 (m³/m²)', ratioRaftForm: '大底模板 (m²/m²)', ratioRaftRebar: '大底鋼筋 (kg/m²)',
+            ratioB1RC: 'B1 混凝土 (m³/m²)', ratioB1Form: 'B1 模板 (m²/m²)', ratioB1Rebar: 'B1 鋼筋 (kg/m²)',
+            ratioTypicalRC: '標層混凝土 (m³/m²)', ratioTypicalForm: '標層模板 (m²/m²)', ratioTypicalRebar: '標層鋼筋 (kg/m²)',
+            // 新增標籤用於 Excel 匯出
+            depthRatio: '壁深度比 (D/H)', thicknessRatio: '壁厚係數 (H/x)', pileSpacing: '排樁中心間距 (m)',
+            supportSpan: '支撐層間距 (m/層)', b1HeightCustom: 'B1層高 (m)', typicalHeightCustom: '標準層高 (m)', raftFoundationCustom: '大底厚度 (m)'
+        };
+
+        // --- 狀態管理 ---
+        let state = {
+            retainingMethod: 'wall',
+            belowUnitArea: 120,
+            belowFloors: 3,
+            belowPerimeter: 0,
+            activeRegionId: 'north'
+        };
+
+        let regions = [...INITIAL_REGIONS];
+        let db, auth, appId;
+
+        async function initFirebase() {
+            try {
+                const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+                if (!config) { render(); return; }
+                firebase.initializeApp(config);
+                auth = firebase.auth();
+                db = firebase.firestore();
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'basement-v50-8';
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await auth.signInWithCustomToken(__initial_auth_token);
+                } else {
+                    await auth.signInAnonymously();
+                }
+
+                auth.onAuthStateChanged(user => {
+                    if (user) {
+                        document.getElementById('uid-display').innerText = user.uid;
+                        listenToData(user.uid, appId);
+                    }
+                });
+            } catch (err) { 
+                console.error("Firebase Init Error", err);
+                render(); 
+            }
+        }
+
+        function listenToData(uid, appId) {
+            db.doc(`artifacts/${appId}/users/${uid}/settings/current`).onSnapshot(doc => {
+                if (doc.exists) { state = { ...state, ...doc.data() }; render(); }
+            }, err => console.error("Listen Error", err));
+
+            db.collection(`artifacts/${appId}/users/${uid}/regions`).onSnapshot(snap => {
+                if (!snap.empty) {
+                    regions = snap.docs.map(d => ({ id: d.id, ...DEFAULT_PARAMS, ...d.data() }));
+                    render();
+                } else {
+                    const batch = db.batch();
+                    INITIAL_REGIONS.forEach(r => batch.set(db.doc(`artifacts/${appId}/users/${uid}/regions/${r.id}`), r));
+                    batch.commit();
+                }
+            }, err => console.error("Regions Listen Error", err));
+        }
+
+        async function saveData() {
+            if (!auth || !auth.currentUser) return;
+            setSyncStatus(true);
+            try { await db.doc(`artifacts/${appId}/users/${auth.currentUser.uid}/settings/current`).set(state); } catch (e) {}
+            setTimeout(() => setSyncStatus(false), 500);
+        }
+
+        function setSyncStatus(isSyncing) {
+            const badge = document.getElementById('sync-badge');
+            const icon = document.getElementById('sync-icon');
+            const text = document.getElementById('sync-text');
+            if (isSyncing) {
+                badge.className = "flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-black shadow-sm transition-all duration-300 bg-amber-50 border-amber-200 text-amber-600";
+                icon.className = "w-3 h-3 animate-sync";
+                text.innerText = "同步中...";
+            } else {
+                badge.className = "flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-black shadow-sm transition-all duration-300 bg-emerald-50 border-emerald-200 text-emerald-600";
+                icon.className = "w-3 h-3";
+                text.innerText = "雲端同步";
+            }
+        }
+
+        function updateState(key, value) {
+            let val = (typeof value === 'string' && !['wall', 'pile'].includes(value)) ? parseFloat(value) : value;
+            if (isNaN(val) && typeof val !== 'string') val = 0;
+            state[key] = val;
+            render();
+            saveData();
+        }
+
+        function selectRegion(id) { state.activeRegionId = id; render(); saveData(); }
+
+        async function updateRegionName(newName) {
+            const reg = regions.find(r => r.id === state.activeRegionId);
+            if (!reg || !newName) return;
+            reg.name = newName;
+            if (db && auth.currentUser) await db.doc(`artifacts/${appId}/users/${auth.currentUser.uid}/regions/${reg.id}`).update({ name: newName });
+            render();
+        }
+
+        async function updateRegionParam(key, value) {
+            const val = parseFloat(value) || 0;
+            const reg = regions.find(r => r.id === state.activeRegionId);
+            if (!reg) return;
+            reg[key] = val;
+            if (db && auth.currentUser) await db.doc(`artifacts/${appId}/users/${auth.currentUser.uid}/regions/${reg.id}`).update({ [key]: val });
+            render();
+        }
+
+        async function addNewRegion() {
+            const id = 'reg_' + Date.now();
+            const newReg = { id, name: '新區域', ...DEFAULT_PARAMS };
+            if (db && auth.currentUser) await db.doc(`artifacts/${appId}/users/${auth.currentUser.uid}/regions/${id}`).set(newReg);
+            state.activeRegionId = id;
+            render();
+        }
+
+        async function deleteCurrentRegion() {
+            if (regions.length <= 1) return;
+            const id = state.activeRegionId;
+            if (db && auth.currentUser) await db.doc(`artifacts/${appId}/users/${auth.currentUser.uid}/regions/${id}`).delete();
+            state.activeRegionId = regions[0].id;
+            render();
+        }
+
+        function resetKey(key) { state[key] = 0; render(); saveData(); }
+
+        function calculate() {
+            const activeReg = regions.find(r => r.id === state.activeRegionId) || regions[0] || INITIAL_REGIONS[0];
+            const areaM2 = state.belowUnitArea * PING_TO_M2;
+            const sysPerimeter = Math.round(Math.sqrt(areaM2) * 4);
+            const finalPerimeter = state.belowPerimeter > 0 ? state.belowPerimeter : sysPerimeter;
+            const excavationDepth = state.belowFloors > 0 ? activeReg.b1HeightCustom + (Math.max(0, state.belowFloors - 1) * activeReg.typicalHeightCustom) + activeReg.raftFoundationCustom : 0;
+            const supportLayers = excavationDepth > 3 ? Math.max(1, Math.ceil(excavationDepth / activeReg.supportSpan)) : 0;
+            
+            let retainingCost = 0, wallThickness = 0, wallTotalArea = 0, pileCount = 0;
+            if (state.retainingMethod === 'wall') {
+                wallThickness = Math.max(0.6, Math.round((excavationDepth / activeReg.thicknessRatio) * 10) / 10);
+                wallTotalArea = finalPerimeter * (excavationDepth * activeReg.depthRatio);
+                let wallRate = activeReg.rateWall60;
+                if (wallThickness >= 1.0) wallRate = activeReg.rateWall100;
+                else if (wallThickness >= 0.9) wallRate = activeReg.rateWall90;
+                else if (wallThickness >= 0.8) wallRate = activeReg.rateWall80;
+                else if (wallThickness >= 0.7) wallRate = activeReg.rateWall70;
+                retainingCost = wallTotalArea * wallRate;
+            } else {
+                pileCount = Math.ceil(finalPerimeter / activeReg.pileSpacing);
+                retainingCost = pileCount * activeReg.ratePileUnit;
+            }
+
+            const totalExcVolume = areaM2 * excavationDepth;
+            const totalBelowBuildArea = state.belowUnitArea * state.belowFloors;
+            let subRC = 0, subForm = 0, subRebar = 0;
+            if (state.belowFloors > 0) {
+                subRC += areaM2 * (activeReg.ratioRaftRC + activeReg.ratioB1RC);
+                subForm += areaM2 * (activeReg.ratioRaftForm + activeReg.ratioB1Form);
+                subRebar += areaM2 * (activeReg.ratioRaftRebar + activeReg.ratioB1Rebar);
+                if (state.belowFloors > 1) {
+                    const typ = state.belowFloors - 1;
+                    subRC += (areaM2 * typ) * activeReg.ratioTypicalRC;
+                    subForm += (areaM2 * typ) * activeReg.ratioTypicalForm;
+                    subRebar += (areaM2 * typ) * activeReg.ratioTypicalRebar;
+                }
+            }
+
+            const results = {
+                retaining: retainingCost,
+                earthwork: totalExcVolume * activeReg.rateEarthworkM3,
+                support: state.belowUnitArea * supportLayers * activeReg.rateSupportM2,
+                structure: (subRC * activeReg.rateRC_M3) + (subForm * activeReg.rateForm_M2) + (subRebar * activeReg.rateRebar_KG),
+                mep: totalBelowBuildArea * activeReg.rateBasementMEP,
+                finish: totalBelowBuildArea * activeReg.rateBasementFinish
+            };
+
+            const total = Object.values(results).reduce((a, b) => a + b, 0);
+            return { physics: { wallTotalArea, wallThickness, wallTotalDepth: excavationDepth, totalExcVolume, totalBelowBuildArea, subRC, subForm, subRebar, supportLayers, sysPerimeter, pileCount }, results, total, avg: totalBelowBuildArea > 0 ? total / totalBelowBuildArea : 0, activeReg };
+        }
+
+        // --- EXCEL ---
+        function exportToExcel() {
+            try {
+                if (typeof XLSX === 'undefined') { throw new Error('Excel 函式庫尚未載入'); }
+                const regionsExport = regions.map(r => {
+                    const row = { '區域 ID': r.id, '區域名稱': r.name };
+                    // 遍歷所有標籤，將區域內的對應數值填入 Excel 列
+                    Object.keys(KEY_LABELS).forEach(k => {
+                        row[KEY_LABELS[k]] = r[k] !== undefined ? r[k] : DEFAULT_PARAMS[k];
+                    });
+                    return row;
+                });
+                const wb = XLSX.utils.book_new();
+                const wsRegions = XLSX.utils.json_to_sheet(regionsExport);
+                XLSX.utils.book_append_sheet(wb, wsRegions, "區域設定資料");
+                XLSX.writeFile(wb, `地下室造價設定檔_${new Date().toLocaleDateString()}.xlsx`);
+            } catch (err) {
+                alert("匯出失敗：" + err.message);
+            }
+        }
+
+        async function importFromExcel(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            setSyncStatus(true);
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    if (typeof XLSX === 'undefined') { throw new Error('Excel 函式庫尚未載入'); }
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    
+                    const sheetName = workbook.SheetNames.find(n => n.includes("資料") || n.includes("單價")) || workbook.SheetNames[0];
+                    const ws = workbook.Sheets[sheetName];
+                    if (!ws) { throw new Error("找不到有效的數據工作表！"); }
+                    
+                    const rows = XLSX.utils.sheet_to_json(ws);
+                    if (rows.length === 0) { throw new Error("工作表內無數據。"); }
+
+                    const labelToKey = {};
+                    Object.keys(KEY_LABELS).forEach(k => labelToKey[KEY_LABELS[k]] = k);
+
+                    const processedRegions = rows.map((row, idx) => {
+                        const newReg = { ...DEFAULT_PARAMS };
+                        newReg.id = row['區域 ID'] || row['id'] || 'reg_imported_' + Date.now() + '_' + idx;
+                        newReg.name = row['區域名稱'] || row['name'] || '匯入區域_' + idx;
+
+                        Object.keys(row).forEach(excelKey => {
+                            if (DEFAULT_PARAMS.hasOwnProperty(excelKey)) {
+                                const val = parseFloat(row[excelKey]);
+                                if (!isNaN(val)) newReg[excelKey] = val;
+                            } else if (labelToKey[excelKey]) {
+                                const val = parseFloat(row[excelKey]);
+                                if (!isNaN(val)) newReg[labelToKey[excelKey]] = val;
+                            }
+                        });
+                        return newReg;
+                    });
+
+                    if (processedRegions.length > 0) {
+                        regions = processedRegions;
+                        if (auth && auth.currentUser) {
+                            const uid = auth.currentUser.uid;
+                            const batch = db.batch();
+                            for (const r of regions) {
+                                batch.set(db.doc(`artifacts/${appId}/users/${uid}/regions/${r.id}`), r);
+                            }
+                            await batch.commit();
+                        }
+                        state.activeRegionId = regions[0].id;
+                        render();
+                        alert(`成功匯入 ${processedRegions.length} 個區域之單價與工法參數！`);
+                    }
+                } catch (err) {
+                    console.error("Import Error:", err);
+                    alert("匯入失敗：" + err.message);
+                } finally {
+                    setSyncStatus(false);
+                }
+            };
+            reader.onerror = () => alert("檔案讀取出錯");
+            reader.readAsArrayBuffer(file);
+        }
+
+        function render() {
+            const { physics, results, total, avg, activeReg } = calculate();
+            const isWall = state.retainingMethod === 'wall';
+            const currencyFormatter = new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 });
+
+            // 區域切換鈕
+            const regionListEl = document.getElementById('region-list');
+            if (regionListEl) {
+                regionListEl.innerHTML = regions.map(r => `
+                    <button onclick="selectRegion('${r.id}')" class="px-4 py-2 text-xs font-black rounded-xl border-2 transition-all ${state.activeRegionId === r.id ? 'region-tab-active shadow-sm' : 'border-slate-100 text-slate-400 hover:border-slate-200'}">
+                        ${r.name}
+                    </button>
+                `).join('');
+            }
+            
+            document.getElementById('current-region-label').innerText = activeReg.name;
+            document.getElementById('edit-region-name').value = activeReg.name;
+            document.getElementById('total-budget').innerText = currencyFormatter.format(total);
+            document.getElementById('footer-total').innerText = currencyFormatter.format(total);
+            document.getElementById('avg-cost').innerText = currencyFormatter.format(avg);
+
+            document.getElementById('btn-method-wall').className = `flex-1 py-2 text-xs font-bold rounded-lg transition-all ${isWall ? 'method-tab-active shadow-md' : 'text-slate-400 hover:text-slate-600'}`;
+            document.getElementById('btn-method-pile').className = `flex-1 py-2 text-xs font-bold rounded-lg transition-all ${!isWall ? 'method-tab-active shadow-md' : 'text-slate-400 hover:text-slate-600'}`;
+            document.getElementById('method-wall-params').classList.toggle('hidden', !isWall);
+            document.getElementById('method-pile-params').classList.toggle('hidden', isWall);
+
+            // 渲染全域規模設定
+            document.querySelectorAll('.input-group').forEach(el => {
+                const key = el.dataset.key;
+                const label = el.dataset.label;
+                let displayVal = state[key];
+                if (key === 'belowPerimeter' && state[key] === 0) displayVal = physics.sysPerimeter;
+                
+                el.innerHTML = `
+                    <label class="text-[9px] font-black uppercase mb-1 text-slate-400">${label}</label>
+                    <div class="relative">
+                        <input type="number" step="any" value="${displayVal}" onchange="updateState('${key}', this.value)" class="w-full border rounded-lg pl-3 pr-8 py-2 text-xs font-black outline-none bg-white border-slate-200 focus:border-indigo-500">
+                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-black text-slate-400">${el.dataset.unit || ""}</span>
+                    </div>
+                `;
+            });
+
+            // 渲染隨區域變動的工法參數設定
+            document.querySelectorAll('.input-group-region').forEach(el => {
+                const key = el.dataset.key;
+                const label = el.dataset.label;
+                const displayVal = activeReg[key];
+                
+                el.innerHTML = `
+                    <label class="text-[9px] font-black uppercase mb-1 text-slate-400">${label}</label>
+                    <div class="relative">
+                        <input type="number" step="any" value="${displayVal}" onchange="updateRegionParam('${key}', this.value)" class="w-full border rounded-lg pl-3 pr-8 py-2 text-xs font-black outline-none bg-white border-slate-200 focus:border-indigo-500">
+                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-black text-slate-400">${el.dataset.unit || ""}</span>
+                    </div>
+                `;
+            });
+
+            // 物理資訊卡
+            document.getElementById('physics-cards').innerHTML = [
+                isWall ? { t: "總連續壁面積", v: `${Math.round(physics.wallTotalArea)} m²`, i: "maximize-2", h: true } : { t: "排樁總支數", v: `${physics.pileCount} 支`, i: "align-justify", h: true },
+                { t: "開挖深度", v: `${physics.wallTotalDepth.toFixed(1)} m`, i: "ruler" },
+                { t: "地下總坪數", v: `${Math.round(physics.totalBelowBuildArea)} 坪`, i: "box" },
+                { t: "總土方量", v: `${Math.round(physics.totalExcVolume)} m³`, i: "tractor" }
+            ].map(c => `
+                <div class="p-4 rounded-2xl border shadow-sm ${c.h ? 'bg-indigo-900 border-indigo-700 text-white' : 'bg-white border-slate-200 text-slate-800'}">
+                    <div class="text-[9px] font-black uppercase flex items-center gap-1.5 mb-2 ${c.h ? 'text-indigo-300' : 'text-slate-400'}"><i data-lucide="${c.i}" class="w-3.5 h-3.5"></i> ${c.t}</div>
+                    <div class="text-lg font-black tracking-tight">${c.v}</div>
+                </div>
+            `).join('');
+
+            // 預算明細
+            document.getElementById('budget-body').innerHTML = [
+                { l: isWall ? "連續壁工程" : "排樁工程", u: isWall ? `面積 ${Math.round(physics.wallTotalArea)}m² / 厚 ${(physics.wallThickness * 100).toFixed(0)}cm` : `${physics.pileCount} 支`, v: results.retaining },
+                { l: "主體結構工程", u: `RC ${Math.round(physics.subRC)}m³ / 鋼筋 ${(physics.subRebar/1000).toFixed(1)}t`, v: results.structure },
+                { l: "土方清運工程", u: `${Math.round(physics.totalExcVolume)} m³`, v: results.earthwork },
+                { l: "安全支撐工程", u: `採用 ${physics.supportLayers} 層支撐`, v: results.support },
+                { l: "機電工程 (地下室)", u: `${Math.round(physics.totalBelowBuildArea)} 坪 推估`, v: results.mep },
+                { l: "粉刷裝修 (地下室)", u: `${Math.round(physics.totalBelowBuildArea)} 坪 推估`, v: results.finish }
+            ].map(r => `
+                <tr class="hover:bg-slate-50 transition-colors"><td class="px-8 py-4 font-black text-slate-800">${r.l}</td><td class="px-8 py-4 text-right text-[10px] text-slate-400 font-black">${r.u}</td><td class="px-8 py-4 text-right tabular-nums font-bold text-slate-600">${currencyFormatter.format(r.v)}</td></tr>
+            `).join('');
+
+            // 單價與用量編輯器
+            const rateFields = ['rateEarthworkM3','rateSupportM2','rateBasementMEP','rateBasementFinish','rateRC_M3','rateForm_M2','rateRebar_KG','ratePileUnit','rateWall60','rateWall70','rateWall80','rateWall90','rateWall100'];
+            document.getElementById('rates-editor').innerHTML = rateFields.map(k => `
+                <div class="space-y-1"><label class="text-[8px] font-black uppercase text-indigo-400">${KEY_LABELS[k]}</label>
+                <input type="number" value="${activeReg[k]}" onchange="updateRegionParam('${k}', this.value)" class="w-full border-none rounded-lg px-2 py-1 text-xs font-black bg-white/50 focus:bg-white outline-none"></div>
+            `).join('');
+
+            const ratioFields = ['ratioRaftRC','ratioRaftForm','ratioRaftRebar','ratioB1RC','ratioB1Form','ratioB1Rebar','ratioTypicalRC','ratioTypicalForm','ratioTypicalRebar'];
+            document.getElementById('ratios-editor').innerHTML = ratioFields.map(k => `
+                <div class="space-y-1"><label class="text-[8px] font-black uppercase text-indigo-400">${KEY_LABELS[k]}</label>
+                <input type="number" step="0.01" value="${activeReg[k]}" onchange="updateRegionParam('${k}', this.value)" class="w-full border-none rounded-lg px-2 py-1 text-xs font-black bg-white/50 focus:bg-white outline-none"></div>
+            `).join('');
+
+            lucide.createIcons();
+        }
+
+        window.onload = initFirebase;
+    </script>
+</body>
+</html>
